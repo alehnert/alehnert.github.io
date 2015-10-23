@@ -1,0 +1,158 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Adrienne Lehnert"
+date: "October 22, 2015"
+output: html_document
+---
+## Introduction
+The purpose of this document is to present a model for predicting the "classe", or style of completing a biceps curl. The model is based on a data set provided by Velloso, E. et al and presented at the Proceedings of 4th International Conference in Cooperation in Stuttgart, Germany. The model is then used to predict the classe for twenty cases in a testing data set.
+
+### Data set
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). There were four sensors: an armband (arm), glove (forearm), lumbar belt, and on the dumbbell. Features were calculated on the euler angles (roll, pitch, yaw), as well as the raw accelerometer, gyroscope and magnetometer readings. The Euler angle measurements had eight features: mean, variance, standard deviation, max, min, amplitude, kurtosis and skewness. 
+
+## Building the model
+The following libraries were necessary for this model:
+```{r,warning=FALSE,message=FALSE}
+library(caret)
+library(plyr)
+library(dplyr)
+library(AppliedPredictiveModeling)
+library(rpart)
+library(ipred)
+```
+
+read the data and set seed:
+```{r,cache=TRUE}
+setwd("/Users/alehnert/Documents/R")
+TrData<-read.csv("pml-training.csv")
+TeData<-read.csv("pml-testing.csv")
+set.seed(906)
+```
+
+### Data Cleaning
+ Many variables are unavailable in test data, so should not be considered when building the model.  
+ 1. values present in columns: 1:11, 37:49, 60:68, 84:86, 102, 113:124, 140, 151:160  
+ 2. column 1 is just a row number and must be excluded or your ML algorithm will be "perfect" and completely useless!
+ 3. columns 2-7 are also related to identifiers for the purpose of this model  
+ 4. column 160 in training data is classe, col 160 in testing is problem number  
+ 5. columns with variables for model are 8:59  
+ 
+ It should be noted that, ideally, the model would be applied to data from entire events (i.e. the collection of consecutive time frames comprising a single bicep curl.) However, as the test data contains only single time frames or "snapshots" in an exercise, and we don't know when in the exercise the snapshot occured, we must treat each row as its own independent observation. At this point I also selected 10% of the data as a "test" set that never gets fit to a model during training and is only used for estimation of the out-of-sample error.
+ 
+```{r, echo=TRUE}
+TrD<-TrData[,c(1:11,37:49,60:68,84:86,102,113:124,140,151:160)] # columns of interest in training data
+TeD<-TeData[,c(1:11,37:49,60:68,84:86,102,113:124,140,151:160)] # columns of interest in testing data
+TrD_original<-TrD # store original for later
+inTrain<-createDataPartition(y=TrD$classe,p=0.9,list=F)
+TrD<-TrD[inTrain,]; # for making models
+OOSD<-TrD[-inTrain,] # out of sample data
+```
+
+### Exploratory analysis
+ The first step was to examine the relationships between the variables and classe. I looked at pairs on a per-sensor basis where belt=8:20, arm=21:33, dumbbell=34:46, forearm=47:59. The figures here shows the boxplots for all scaled and centered variables.
+```{r,cache=TRUE, echo=FALSE}
+Scaled_TrD<-TrD
+preObj<-preProcess(TrD[,8:59],method=c("center","scale"))
+Scaled_TrD[8:59]<-predict(preObj,TrD[,8:59]) # save centered and scaled on variable columns
+inTrain<-createDataPartition(y=Scaled_TrD$classe,p=0.1,list=F) # use 10% for clarity on figure
+ExplTr<-TrD[inTrain,]
+featurePlot(ExplTr[,8:33],ExplTr$classe, "box", cex=0.5, main="Belt and arm variables") 
+featurePlot(ExplTr[,34:59],ExplTr$classe, "box", cex=0.5, main="dumbbell and forearm variables")
+```
+
+Although hard to see in this figure, it is obvious that several of the variables have means and/or distributions that would make for good variables in a machine learning algorithm. Especially interesting are the magnet and accel for the arm.
+
+Next, I explored the relationships a little further by fitting models to each sensor's variables and making note of which ones were most important. The variables with importance >50% were combined into a single list (ImpVarBySensor)
+```{r,cache=TRUE}
+cols<-c(8:20,60) # Columns of interest (this one for belt variables only--others are not shown here)
+modFit<-train(classe~.,data=TrD[,cols],method="rpart")
+print(varImp(modFit))
+ImpVarBySensor<-c(8,19,21,23,28,31,32,34,39,44,47,48,54)
+```
+
+Alternatively, I created a potential rpart model using all variables and selected those with the highest importance (>25%) and stored them in the variable ImpVarTot
+```{r,cache=TRUE}
+modFit<-train(classe~.,data=TrD[8:60],method="rpart")
+print(varImp(modFit))
+ImpVarTot<-c(8,10,11,17,19,28,31,45,46,47,48)
+```
+
+### Choosing a model
+I then tried out both sets of variables (ImpVarBySensor and ImpVarTot) in rpart models with a 60/40 train/test data partition to get a rough idea regarding the accuracy (and therefore out-of-sample error) of the models:  
+
+```{r,echo=FALSE}
+# Try using rpart with ImpVarBySensor 68%
+inTrain<-createDataPartition(y=TrD$classe,p=0.6,list=F)
+trainD<-TrD[inTrain,];testD<-TrD[-inTrain,]
+fitBySensor<-rpart(classe~.,data=trainD[,c(ImpVarBySensor,60)],method="class")
+PbySensor<-predict(fitBySensor,newdata=testD[,c(ImpVarBySensor,60)],type="class")
+confusionMatrix(PbySensor,testD$classe)
+
+# Try using rpart with ImpVarTot 68%
+inTrain<-createDataPartition(y=TrD$classe,p=0.6,list=F)
+trainD<-TrD[inTrain,];testD<-TrD[-inTrain,]
+fitByTot<-rpart(classe~.,data=trainD[,c(ImpVarTot,60)],method="class")
+PByTot<-predict(fitByTot,newdata=testD[,c(ImpVarTot,60)],type="class")
+confusionMatrix(PByTot,testD$classe)
+```
+
+As seen in the statistics, the confidence intervals for the two options overlap so there is no significant difference in the accuracies. I chose to use the later (ImpVarTot, or the one based on the most important variables fit all at once), as it uses fewer variables and is thus faster and less prone to overfitting. 
+
+Next I took a closer look at the potential out-of-sample error. I simulated fitting the model to 80% of the training data and testing with the other 20% many times and histogrammed the out-of-sample error level for each iteration. I also chose the parameters of the most accurate and saved it as the final version of fitByTot  
+
+```{r,cache=TRUE,echo=FALSE}
+Error<-data.frame(results=NA)
+Er<-1
+for (i in 1:1000){
+  inTrain<-createDataPartition(y=TrD$classe,p=0.6,list=F)
+  trainD<-TrD[inTrain,];testD<-TrD[-inTrain,]
+  fit<-rpart(classe~.,data=trainD[,c(ImpVarTot,60)],method="class")
+  P<-predict(fit,newdata=testD[,c(ImpVarTot,60)],type="class")
+  cm<-confusionMatrix(P,testD$classe)
+  Error[i,1]<-1-cm$overall['Accuracy']
+  if (Error[i,1]<Er){
+    fitByTot<-fit # update the model
+    Er<-1-cm$overall['Accuracy'] # update the error minimum
+    }
+}
+hist(Error$results,20,main="Out of Sample Error",xlab="1-Accuracy")
+print(paste("The most accurate model had an out of sample error estimate of ",round(Er,2)))
+```
+
+
+Here is the proposed model:  
+
+```{r,echo=FALSE}
+plot(fitByTot,compress=T); main="Classification tree for exercise quality"
+text(fitByTot,cex=0.5)
+```
+
+A look at the cp table shows that the cross-validation error (xerror) is at its lowest point as is and does not need further pruning.
+```{r}
+printcp(fitByTot) # Display the cp (components) table
+```
+
+
+Finally, I applied the final model discussed above, fitByTot, to the reserved data to get the out of sample error. Note that this out of sample error is very close to the estimated out of sample error found earlier thanks to those  cross-validation efforts.  
+
+```{r}
+Pfinal<-predict(fitByTot,newdata=OOSD[,c(ImpVarTot,60)],type="class")
+confusionMatrix(Pfinal,OOSD$classe)
+```
+```{r,echo=FALSE}
+cm<-confusionMatrix(Pfinal,OOSD$classe)
+print(paste("Out of sample error is:",round(1-cm$overall['Accuracy'],2)))
+```
+
+
+## Discussion
+In the orginal paper by Velloso, E. et al, the authors discuss the model they chose:  
+
+"17 features were selected: in the belt, were selected the mean and variance of the roll, maximum, range and variance of the accelerometer vector, variance of the gyro and variance of the magnetometer. In the arm, the variance of the accelerometer vector and the maximum and minimum of the magnetometer were selected. In the dumbbell, the selected features were the maximum of the acceleration, variance of the gyro and maximum and minimum of the magnetometer, while in the glove, the sum of the pitch and the maximum and minimum of the gyro were selected."  
+
+However, many of these variables do not have values in the provided testing data set, so this model cannot be used. As mentioned above, a better model than the one presented here would be based on the entire event (i.e. time series) and not single snapshots of the exercise. By looking at how parameters change over the course of the bicep curl we should be able to make a better estimate of how well the exercise is being performed and how it should be improved. That being said, the approximate accuracy of the proposed model (73%) is comparable with the researchers' reported confusion matrix (79%).
+
+
+
+
+

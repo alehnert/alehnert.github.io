@@ -1,0 +1,10 @@
+base
+lattice
+ggplot2
+caret
+dplyr
+rpart
+ipred
+plyr
+AppliedPredictiveModeling
+randomForest
